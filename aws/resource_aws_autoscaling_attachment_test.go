@@ -6,9 +6,9 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/autoscaling"
-	"github.com/hashicorp/terraform/helper/acctest"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
 func TestAccAWSAutoscalingAttachment_elb(t *testing.T) {
@@ -16,8 +16,9 @@ func TestAccAWSAutoscalingAttachment_elb(t *testing.T) {
 	rInt := acctest.RandInt()
 
 	resource.ParallelTest(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSAutocalingAttachmentDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccAWSAutoscalingAttachment_elb(rInt),
@@ -58,8 +59,9 @@ func TestAccAWSAutoscalingAttachment_albTargetGroup(t *testing.T) {
 	rInt := acctest.RandInt()
 
 	resource.ParallelTest(t, resource.TestCase{
-		PreCheck:  func() { testAccPreCheck(t) },
-		Providers: testAccProviders,
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSAutocalingAttachmentDestroy,
 		Steps: []resource.TestStep{
 			{
 				Config: testAccAWSAutoscalingAttachment_alb(rInt),
@@ -93,6 +95,32 @@ func TestAccAWSAutoscalingAttachment_albTargetGroup(t *testing.T) {
 			},
 		},
 	})
+}
+
+func testAccCheckAWSAutocalingAttachmentDestroy(s *terraform.State) error {
+	conn := testAccProvider.Meta().(*AWSClient).autoscalingconn
+
+	for _, rs := range s.RootModule().Resources {
+		if rs.Type != "aws_autoscaling_attachment" {
+			continue
+		}
+
+		resp, err := conn.DescribeAutoScalingGroups(&autoscaling.DescribeAutoScalingGroupsInput{
+			AutoScalingGroupNames: []*string{aws.String(rs.Primary.ID)},
+		})
+
+		if err == nil {
+			for _, autoscalingGroup := range resp.AutoScalingGroups {
+				if aws.StringValue(autoscalingGroup.AutoScalingGroupName) == rs.Primary.ID {
+					return fmt.Errorf("AWS Autoscaling Attachment is still exist: %s", rs.Primary.ID)
+				}
+			}
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 func testAccCheckAWSAutocalingElbAttachmentExists(asgname string, loadBalancerCount int) resource.TestCheckFunc {

@@ -15,11 +15,12 @@ import (
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/private/protocol/json/jsonutil"
 	"github.com/aws/aws-sdk-go/service/emr"
-	"github.com/hashicorp/terraform/helper/hashcode"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/helper/schema"
-	"github.com/hashicorp/terraform/helper/structure"
-	"github.com/hashicorp/terraform/helper/validation"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/hashcode"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/structure"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
+	"github.com/terraform-providers/terraform-provider-aws/aws/internal/keyvaluetags"
 )
 
 func resourceAwsEMRCluster() *schema.Resource {
@@ -84,6 +85,10 @@ func resourceAwsEMRCluster() *schema.Resource {
 		},
 
 		Schema: map[string]*schema.Schema{
+			"arn": {
+				Type:     schema.TypeString,
+				Computed: true,
+			},
 			"name": {
 				Type:     schema.TypeString,
 				ForceNew: true,
@@ -382,6 +387,13 @@ func resourceAwsEMRCluster() *schema.Resource {
 							Type:     schema.TypeString,
 							Computed: true,
 						},
+						"instance_count": {
+							Type:         schema.TypeInt,
+							Optional:     true,
+							ForceNew:     true,
+							Default:      1,
+							ValidateFunc: validation.IntInSlice([]int{1, 3}),
+						},
 						"instance_type": {
 							Type:     schema.TypeString,
 							Required: true,
@@ -618,6 +630,12 @@ func resourceAwsEMRCluster() *schema.Resource {
 				Optional:     true,
 				ValidateFunc: validateAwsEmrCustomAmiId,
 			},
+			"step_concurrency_level": {
+				Type:         schema.TypeInt,
+				Optional:     true,
+				Default:      1,
+				ValidateFunc: validation.IntBetween(1, 256),
+			},
 		},
 	}
 }
@@ -633,6 +651,11 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		keepJobFlowAliveWhenNoSteps = v.(bool)
 	}
 
+	// For multiple master nodes, EMR automatically enables
+	// termination protection and ignores this configuration at launch.
+	// There is additional handling after the job flow is running
+	// to potentially disable termination protection to match the
+	// desired Terraform configuration.
 	terminationProtection := false
 	if v, ok := d.GetOk("termination_protection"); ok {
 		terminationProtection = v.(bool)
@@ -646,7 +669,7 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		m := l[0].(map[string]interface{})
 
 		instanceGroup := &emr.InstanceGroupConfig{
-			InstanceCount: aws.Int64(1),
+			InstanceCount: aws.Int64(int64(m["instance_count"].(int))),
 			InstanceRole:  aws.String(emr.InstanceRoleTypeMaster),
 			InstanceType:  aws.String(m["instance_type"].(string)),
 			Market:        aws.String(emr.MarketTypeOnDemand),
@@ -790,6 +813,7 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		ReleaseLabel:      aws.String(d.Get("release_label").(string)),
 		ServiceRole:       aws.String(d.Get("service_role").(string)),
 		VisibleToAllUsers: aws.Bool(d.Get("visible_to_all_users").(bool)),
+		Tags:              keyvaluetags.New(d.Get("tags").(map[string]interface{})).IgnoreAws().EmrTags(),
 	}
 
 	if v, ok := d.GetOk("additional_info"); ok {
@@ -824,6 +848,10 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		params.CustomAmiId = aws.String(v.(string))
 	}
 
+	if v, ok := d.GetOk("step_concurrency_level"); ok {
+		params.StepConcurrencyLevel = aws.Int64(int64(v.(int)))
+	}
+
 	if instanceProfile != "" {
 		params.JobFlowRole = aws.String(instanceProfile)
 	}
@@ -835,10 +863,6 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 	if v, ok := d.GetOk("step"); ok {
 		steps := v.([]interface{})
 		params.Steps = expandEmrStepConfigs(steps)
-	}
-	if v, ok := d.GetOk("tags"); ok {
-		tagsIn := v.(map[string]interface{})
-		params.Tags = expandTags(tagsIn)
 	}
 	if v, ok := d.GetOk("configurations"); ok {
 		confUrl := v.(string)
@@ -879,8 +903,11 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		}
 		return nil
 	})
+	if isResourceTimeoutError(err) {
+		resp, err = conn.RunJobFlow(params)
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("error running EMR Job Flow: %s", err)
 	}
 
 	d.SetId(*resp.JobFlowId)
@@ -904,9 +931,26 @@ func resourceAwsEMRClusterCreate(d *schema.ResourceData, meta interface{}) error
 		Delay:      30 * time.Second, // Wait 30 secs before starting
 	}
 
-	_, err = stateConf.WaitForState()
+	clusterRaw, err := stateConf.WaitForState()
 	if err != nil {
 		return fmt.Errorf("Error waiting for EMR Cluster state to be \"WAITING\" or \"RUNNING\": %s", err)
+	}
+
+	// For multiple master nodes, EMR automatically enables
+	// termination protection and ignores the configuration at launch.
+	// This additional handling is to potentially disable termination
+	// protection to match the desired Terraform configuration.
+	cluster := clusterRaw.(*emr.Cluster)
+
+	if aws.BoolValue(cluster.TerminationProtected) != terminationProtection {
+		input := &emr.SetTerminationProtectionInput{
+			JobFlowIds:           []*string{aws.String(d.Id())},
+			TerminationProtected: aws.Bool(terminationProtection),
+		}
+
+		if _, err := conn.SetTerminationProtection(input); err != nil {
+			return fmt.Errorf("error setting EMR Cluster (%s) termination protection to match configuration: %s", d.Id(), err)
+		}
 	}
 
 	return resourceAwsEMRClusterRead(d, meta)
@@ -942,6 +986,8 @@ func resourceAwsEMRClusterRead(d *schema.ResourceData, meta interface{}) error {
 		}
 
 		d.Set("cluster_state", state)
+
+		d.Set("arn", aws.StringValue(cluster.ClusterArn))
 	}
 
 	instanceGroups, err := fetchAllEMRInstanceGroups(emrconn, d.Id())
@@ -988,6 +1034,10 @@ func resourceAwsEMRClusterRead(d *schema.ResourceData, meta interface{}) error {
 		return fmt.Errorf("error setting master_instance_group: %s", err)
 	}
 
+	if err := d.Set("tags", keyvaluetags.EmrKeyValueTags(cluster.Tags).IgnoreAws().Map()); err != nil {
+		return fmt.Errorf("error settings tags: %s", err)
+	}
+
 	d.Set("name", cluster.Name)
 
 	d.Set("service_role", cluster.ServiceRole)
@@ -997,10 +1047,10 @@ func resourceAwsEMRClusterRead(d *schema.ResourceData, meta interface{}) error {
 	d.Set("log_uri", cluster.LogUri)
 	d.Set("master_public_dns", cluster.MasterPublicDnsName)
 	d.Set("visible_to_all_users", cluster.VisibleToAllUsers)
-	d.Set("tags", tagsToMapEMR(cluster.Tags))
 	d.Set("ebs_root_volume_size", cluster.EbsRootVolumeSize)
 	d.Set("scale_down_behavior", cluster.ScaleDownBehavior)
 	d.Set("termination_protection", cluster.TerminationProtected)
+	d.Set("step_concurrency_level", cluster.StepConcurrencyLevel)
 
 	if cluster.CustomAmiId != nil {
 		d.Set("custom_ami_id", cluster.CustomAmiId)
@@ -1292,10 +1342,24 @@ func resourceAwsEMRClusterUpdate(d *schema.ResourceData, meta interface{}) error
 		}
 	}
 
-	if err := setTagsEMR(conn, d); err != nil {
-		return err
-	} else {
-		d.SetPartial("tags")
+	if d.HasChange("tags") {
+		o, n := d.GetChange("tags")
+
+		if err := keyvaluetags.EmrUpdateTags(conn, d.Id(), o, n); err != nil {
+			return fmt.Errorf("error updating EMR Cluster (%s) tags: %s", d.Id(), err)
+		}
+	}
+
+	if d.HasChange("step_concurrency_level") {
+		d.SetPartial("step_concurrency_level")
+		_, errModify := conn.ModifyCluster(&emr.ModifyClusterInput{
+			ClusterId:            aws.String(d.Id()),
+			StepConcurrencyLevel: aws.Int64(int64(d.Get("step_concurrency_level").(int))),
+		})
+		if errModify != nil {
+			log.Printf("[ERROR] %s", errModify)
+			return errModify
+		}
 	}
 
 	d.Partial(false)
@@ -1318,46 +1382,70 @@ func resourceAwsEMRClusterDelete(d *schema.ResourceData, meta interface{}) error
 		return err
 	}
 
+	input := &emr.ListInstancesInput{
+		ClusterId: aws.String(d.Id()),
+	}
+	var resp *emr.ListInstancesOutput
+	var count int
 	err = resource.Retry(20*time.Minute, func() *resource.RetryError {
-		resp, err := conn.ListInstances(&emr.ListInstancesInput{
-			ClusterId: aws.String(d.Id()),
-		})
+		var err error
+		resp, err = conn.ListInstances(input)
 
 		if err != nil {
 			return resource.NonRetryableError(err)
 		}
 
-		instanceCount := len(resp.Instances)
-
-		if resp == nil || instanceCount == 0 {
-			log.Printf("[DEBUG] No instances found for EMR Cluster (%s)", d.Id())
-			return nil
+		count = countEMRRemainingInstances(resp, d.Id())
+		if count != 0 {
+			return resource.RetryableError(fmt.Errorf("EMR Cluster (%s) has (%d) Instances remaining", d.Id(), count))
 		}
-
-		// Collect instance status states, wait for all instances to be terminated
-		// before moving on
-		var terminated []string
-		for j, i := range resp.Instances {
-			if i.Status != nil {
-				if aws.StringValue(i.Status.State) == emr.InstanceStateTerminated {
-					terminated = append(terminated, *i.Ec2InstanceId)
-				}
-			} else {
-				log.Printf("[DEBUG] Cluster instance (%d : %s) has no status", j, *i.Ec2InstanceId)
-			}
-		}
-		if len(terminated) == instanceCount {
-			log.Printf("[DEBUG] All (%d) EMR Cluster (%s) Instances terminated", instanceCount, d.Id())
-			return nil
-		}
-		return resource.RetryableError(fmt.Errorf("EMR Cluster (%s) has (%d) Instances remaining, retrying", d.Id(), len(resp.Instances)))
+		return nil
 	})
 
+	if isResourceTimeoutError(err) {
+		resp, err = conn.ListInstances(input)
+
+		if err == nil {
+			count = countEMRRemainingInstances(resp, d.Id())
+		}
+	}
+
+	if count != 0 {
+		return fmt.Errorf("EMR Cluster (%s) has (%d) Instances remaining", d.Id(), count)
+	}
+
 	if err != nil {
-		return fmt.Errorf("error waiting for EMR Cluster (%s) Instances to drain", d.Id())
+		return fmt.Errorf("error waiting for EMR Cluster (%s) Instances to drain: %s", d.Id(), err)
 	}
 
 	return nil
+}
+
+func countEMRRemainingInstances(resp *emr.ListInstancesOutput, emrClusterId string) int {
+	instanceCount := len(resp.Instances)
+
+	if resp == nil || instanceCount == 0 {
+		log.Printf("[DEBUG] No instances found for EMR Cluster (%s)", emrClusterId)
+		return 0
+	}
+
+	// Collect instance status states, wait for all instances to be terminated
+	// before moving on
+	var terminated []string
+	for j, i := range resp.Instances {
+		if i.Status != nil {
+			if aws.StringValue(i.Status.State) == emr.InstanceStateTerminated {
+				terminated = append(terminated, *i.Ec2InstanceId)
+			}
+		} else {
+			log.Printf("[DEBUG] Cluster instance (%d : %s) has no status", j, *i.Ec2InstanceId)
+		}
+	}
+	if len(terminated) == instanceCount {
+		log.Printf("[DEBUG] All (%d) EMR Cluster (%s) Instances terminated", instanceCount, emrClusterId)
+		return 0
+	}
+	return len(resp.Instances)
 }
 
 func expandApplications(apps []interface{}) []*emr.Application {
@@ -1506,11 +1594,12 @@ func flattenEmrMasterInstanceGroup(instanceGroup *emr.InstanceGroup) []interface
 	}
 
 	m := map[string]interface{}{
-		"bid_price":     aws.StringValue(instanceGroup.BidPrice),
-		"ebs_config":    flattenEBSConfig(instanceGroup.EbsBlockDevices),
-		"id":            aws.StringValue(instanceGroup.Id),
-		"instance_type": aws.StringValue(instanceGroup.InstanceType),
-		"name":          aws.StringValue(instanceGroup.Name),
+		"bid_price":      aws.StringValue(instanceGroup.BidPrice),
+		"ebs_config":     flattenEBSConfig(instanceGroup.EbsBlockDevices),
+		"id":             aws.StringValue(instanceGroup.Id),
+		"instance_count": aws.Int64Value(instanceGroup.RequestedInstanceCount),
+		"instance_type":  aws.StringValue(instanceGroup.InstanceType),
+		"name":           aws.StringValue(instanceGroup.Name),
 	}
 
 	return []interface{}{m}
@@ -1525,6 +1614,7 @@ func flattenEmrKerberosAttributes(d *schema.ResourceData, kerberosAttributes *em
 
 	// Do not set from API:
 	// * ad_domain_join_password
+	// * ad_domain_join_user
 	// * cross_realm_trust_principal_password
 	// * kdc_admin_password
 
@@ -1537,8 +1627,8 @@ func flattenEmrKerberosAttributes(d *schema.ResourceData, kerberosAttributes *em
 		m["ad_domain_join_password"] = v.(string)
 	}
 
-	if kerberosAttributes.ADDomainJoinUser != nil {
-		m["ad_domain_join_user"] = *kerberosAttributes.ADDomainJoinUser
+	if v, ok := d.GetOk("kerberos_attributes.0.ad_domain_join_user"); ok {
+		m["ad_domain_join_user"] = v.(string)
 	}
 
 	if v, ok := d.GetOk("kerberos_attributes.0.cross_realm_trust_principal_password"); ok {
@@ -1678,85 +1768,6 @@ func emrCoreInstanceGroup(grps []*emr.InstanceGroup) *emr.InstanceGroup {
 			return grp
 		}
 	}
-	return nil
-}
-
-func expandTags(m map[string]interface{}) []*emr.Tag {
-	var result []*emr.Tag
-	for k, v := range m {
-		result = append(result, &emr.Tag{
-			Key:   aws.String(k),
-			Value: aws.String(v.(string)),
-		})
-	}
-
-	return result
-}
-
-func tagsToMapEMR(ts []*emr.Tag) map[string]string {
-	result := make(map[string]string)
-	for _, t := range ts {
-		result[*t.Key] = *t.Value
-	}
-
-	return result
-}
-
-func diffTagsEMR(oldTags, newTags []*emr.Tag) ([]*emr.Tag, []*emr.Tag) {
-	// First, we're creating everything we have
-	create := make(map[string]interface{})
-	for _, t := range newTags {
-		create[*t.Key] = *t.Value
-	}
-
-	// Build the list of what to remove
-	var remove []*emr.Tag
-	for _, t := range oldTags {
-		old, ok := create[*t.Key]
-		if !ok || old != *t.Value {
-			// Delete it!
-			remove = append(remove, t)
-		}
-	}
-
-	return expandTags(create), remove
-}
-
-func setTagsEMR(conn *emr.EMR, d *schema.ResourceData) error {
-	if d.HasChange("tags") {
-		oraw, nraw := d.GetChange("tags")
-		o := oraw.(map[string]interface{})
-		n := nraw.(map[string]interface{})
-		create, remove := diffTagsEMR(expandTags(o), expandTags(n))
-
-		// Set tags
-		if len(remove) > 0 {
-			log.Printf("[DEBUG] Removing tags: %s", remove)
-			k := make([]*string, len(remove))
-			for i, t := range remove {
-				k[i] = t.Key
-			}
-
-			_, err := conn.RemoveTags(&emr.RemoveTagsInput{
-				ResourceId: aws.String(d.Id()),
-				TagKeys:    k,
-			})
-			if err != nil {
-				return err
-			}
-		}
-		if len(create) > 0 {
-			log.Printf("[DEBUG] Creating tags: %s", create)
-			_, err := conn.AddTags(&emr.AddTagsInput{
-				ResourceId: aws.String(d.Id()),
-				Tags:       create,
-			})
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	return nil
 }
 

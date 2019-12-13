@@ -5,7 +5,7 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/hashicorp/terraform/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 )
 
 func TestAccAWSSsmParameterDataSource_basic(t *testing.T) {
@@ -27,6 +27,7 @@ func TestAccAWSSsmParameterDataSource_basic(t *testing.T) {
 					resource.TestCheckResourceAttr(resourceName, "type", "String"),
 					resource.TestCheckResourceAttr(resourceName, "value", "TestValue"),
 					resource.TestCheckResourceAttr(resourceName, "with_decryption", "false"),
+					resource.TestCheckResourceAttrSet(resourceName, "version"),
 				),
 			},
 			{

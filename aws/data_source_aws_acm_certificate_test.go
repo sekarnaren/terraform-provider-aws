@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go/service/acm"
-	"github.com/hashicorp/terraform/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
 )
 
 const ACMCertificateRe = `^arn:[^:]+:acm:[^:]+:[^:]+:certificate/.+$`
@@ -177,6 +177,26 @@ func TestAccAWSAcmCertificateDataSource_noMatchReturnsError(t *testing.T) {
 	})
 }
 
+func TestAccAWSAcmCertificateDataSource_KeyTypes(t *testing.T) {
+	resourceName := "aws_acm_certificate.test"
+	dataSourceName := "data.aws_acm_certificate.test"
+	key := tlsRsaPrivateKeyPem(4096)
+	certificate := tlsRsaX509SelfSignedCertificatePem(key, "example.com")
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:  func() { testAccPreCheck(t) },
+		Providers: testAccProviders,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAwsAcmCertificateDataSourceConfigKeyTypes(tlsPemEscapeNewlines(certificate), tlsPemEscapeNewlines(key)),
+				Check: resource.ComposeTestCheckFunc(
+					resource.TestCheckResourceAttrPair(resourceName, "arn", dataSourceName, "arn"),
+				),
+			},
+		},
+	})
+}
+
 func testAccCheckAwsAcmCertificateDataSourceConfig(domain string) string {
 	return fmt.Sprintf(`
 data "aws_acm_certificate" "test" {
@@ -230,4 +250,18 @@ data "aws_acm_certificate" "test" {
 	most_recent = %v
 }
 `, domain, certType, mostRecent)
+}
+
+func testAccAwsAcmCertificateDataSourceConfigKeyTypes(certificate, key string) string {
+	return fmt.Sprintf(`
+resource "aws_acm_certificate" "test" {
+  certificate_body = "%[1]s"
+  private_key      = "%[2]s"
+}
+
+data "aws_acm_certificate" "test" {
+  domain    = "${aws_acm_certificate.test.domain_name}"
+  key_types = ["RSA_4096"]
+}
+`, certificate, key)
 }

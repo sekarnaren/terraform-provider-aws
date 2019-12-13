@@ -1,7 +1,7 @@
 ---
+subcategory: "Autoscaling"
 layout: "aws"
 page_title: "AWS: aws_autoscaling_group"
-sidebar_current: "docs-aws-resource-autoscaling-group"
 description: |-
   Provides an AutoScaling Group resource.
 ---
@@ -111,10 +111,12 @@ resource "aws_autoscaling_group" "example" {
 
       override {
         instance_type = "c4.large"
+        weighted_capacity = "3"
       }
 
       override {
         instance_type = "c3.large"
+        weighted_capacity = "2"
       }
     }
   }
@@ -204,7 +206,7 @@ The following arguments are supported:
 * `load_balancers` (Optional) A list of elastic load balancer names to add to the autoscaling
    group names. Only valid for classic load balancers. For ALBs, use `target_group_arns` instead.
 * `vpc_zone_identifier` (Optional) A list of subnet IDs to launch resources in.
-* `target_group_arns` (Optional) A list of `aws_alb_target_group` ARNs, for use with Application Load Balancing.
+* `target_group_arns` (Optional) A list of `aws_alb_target_group` ARNs, for use with Application or Network Load Balancing.
 * `termination_policies` (Optional) A list of policies to decide how the instances in the auto scale group should be terminated. The allowed values are `OldestInstance`, `NewestInstance`, `OldestLaunchConfiguration`, `ClosestToNextInstanceHour`, `OldestLaunchTemplate`, `AllocationStrategy`, `Default`.
 * `suspended_processes` - (Optional) A list of processes to suspend for the AutoScaling Group. The allowed values are `Launch`, `Terminate`, `HealthCheck`, `ReplaceUnhealthy`, `AZRebalance`, `AlarmNotification`, `ScheduledActions`, `AddToLoadBalancer`.
 Note that if you suspend either the `Launch` or `Terminate` process types, it can prevent your autoscaling group from functioning properly.
@@ -231,6 +233,7 @@ Note that if you suspend either the `Launch` or `Terminate` process types, it ca
    autoscaling group will not select instances with this setting for terminination
    during scale in events.
 * `service_linked_role_arn` (Optional) The ARN of the service-linked role that the ASG will use to call other AWS services
+* `max_instance_lifetime` (Optional) The maximum amount of time, in seconds, that an instance can be in service, values must be either equal to 0 or between 604800 and 31536000 seconds.
 
 ### launch_template
 
@@ -245,7 +248,7 @@ The top-level `launch_template` block supports the following:
 ### mixed_instances_policy
 
 * `instances_distribution` - (Optional) Nested argument containing settings on how to mix on-demand and Spot instances in the Auto Scaling group. Defined below.
-* `launch_template` - (Required) Nested argument containing launch template settings along with the overrides to specify multiple instance types. Defined below.
+* `launch_template` - (Required) Nested argument containing launch template settings along with the overrides to specify multiple instance types and weights. Defined below.
 
 #### mixed_instances_policy instances_distribution
 
@@ -254,9 +257,9 @@ This configuration block supports the following:
 * `on_demand_allocation_strategy` - (Optional) Strategy to use when launching on-demand instances. Valid values: `prioritized`. Default: `prioritized`.
 * `on_demand_base_capacity` - (Optional) Absolute minimum amount of desired capacity that must be fulfilled by on-demand instances. Default: `0`.
 * `on_demand_percentage_above_base_capacity` - (Optional) Percentage split between on-demand and Spot instances above the base on-demand capacity. Default: `100`.
-* `spot_allocation_strategy` - (Optional) How to allocate capacity across the Spot pools. Valid values: `lowest-price`. Default: `lowest-price`.
-* `spot_instance_pools` - (Optional) Number of Spot pools per availability zone to allocate capacity. EC2 Auto Scaling selects the cheapest Spot pools and evenly allocates Spot capacity across the number of Spot pools that you specify. Default: `1`.
-* `spot_max_price` - (Optional) Maximum price per unit hour that the user is willing to pay for the Spot instances. Default: on-demand price.
+* `spot_allocation_strategy` - (Optional) How to allocate capacity across the Spot pools. Valid values: `lowest-price`, `capacity-optimized`. Default: `lowest-price`.
+* `spot_instance_pools` - (Optional) Number of Spot pools per availability zone to allocate capacity. EC2 Auto Scaling selects the cheapest Spot pools and evenly allocates Spot capacity across the number of Spot pools that you specify. Default: `2`.
+* `spot_max_price` - (Optional) Maximum price per unit hour that the user is willing to pay for the Spot instances. Default: an empty string which means the on-demand price.
 
 #### mixed_instances_policy launch_template
 
@@ -280,6 +283,7 @@ This configuration block supports the following:
 This configuration block supports the following:
 
 * `instance_type` - (Optional) Override the instance type in the Launch Template.
+* `weighted_capacity` - (Optional) The number of capacity units, which gives the instance type a proportional weight to other instance types.
 
 ### tag and tags
 

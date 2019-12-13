@@ -1,7 +1,7 @@
 ---
+subcategory: ""
 layout: "aws"
 page_title: "Terraform AWS Provider Custom Service Endpoint Configuration"
-sidebar_current: "docs-aws-guide-custom-service-endpoint"
 description: |-
   Configuring the Terraform AWS Provider to connect to custom AWS service endpoints and AWS compatible solutions.
 ---
@@ -47,14 +47,19 @@ The Terraform AWS Provider allows the following endpoints to be customized:
 
 <div style="column-width: 14em;">
 
+- `accessanalyzer`
 - `acm`
 - `acmpca`
+- `amplify`
 - `apigateway`
 - `applicationautoscaling`
+- `applicationinsights`
 - `appmesh`
+- `appstream`
 - `appsync`
 - `athena`
 - `autoscaling`
+- `autoscalingplans`
 - `backup`
 - `batch`
 - `budgets`
@@ -75,6 +80,7 @@ The Terraform AWS Provider allows the following endpoints to be customized:
 - `cognitoidp`
 - `configservice`
 - `cur`
+- `dataexchange`
 - `datapipeline`
 - `datasync`
 - `dax`
@@ -98,27 +104,34 @@ The Terraform AWS Provider allows the following endpoints to be customized:
 - `es`
 - `firehose`
 - `fms`
+- `forecast`
 - `fsx`
 - `gamelift`
 - `glacier`
 - `globalaccelerator`
 - `glue`
 - `guardduty`
+- `greengrass`
 - `iam`
+- `imagebuilder`
 - `inspector`
 - `iot`
+- `iotanalytics`
+- `iotevents`
 - `kafka`
 - `kinesis_analytics` (**DEPRECATED** Use `kinesisanalytics` instead)
 - `kinesis`
 - `kinesisanalytics`
 - `kinesisvideo`
 - `kms`
+- `lakeformation`
 - `lambda`
 - `lexmodels`
 - `licensemanager`
 - `lightsail`
 - `macie`
 - `managedblockchain`
+- `marketplacecatalog`
 - `mediaconnect`
 - `mediaconvert`
 - `medialive`
@@ -129,8 +142,10 @@ The Terraform AWS Provider allows the following endpoints to be customized:
 - `neptune`
 - `opsworks`
 - `organizations`
+- `personalize`
 - `pinpoint`
 - `pricing`
+- `qldb`
 - `quicksight`
 - `r53` (**DEPRECATED** Use `route53` instead)
 - `ram`
@@ -148,6 +163,7 @@ The Terraform AWS Provider allows the following endpoints to be customized:
 - `serverlessrepo`
 - `servicecatalog`
 - `servicediscovery`
+- `servicequotas`
 - `ses`
 - `shield`
 - `sns`
@@ -217,7 +233,7 @@ provider "aws" {
     iam            = "http://localhost:4593"
     kinesis        = "http://localhost:4568"
     lambda         = "http://localhost:4574"
-    r53            = "http://localhost:4580"
+    route53        = "http://localhost:4580"
     redshift       = "http://localhost:4577"
     s3             = "http://localhost:4572"
     secretsmanager = "http://localhost:4584"

@@ -7,9 +7,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/redshift"
-	"github.com/hashicorp/terraform/helper/acctest"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
 func TestAccAWSRedshiftEventSubscription_basicUpdate(t *testing.T) {
@@ -168,6 +168,54 @@ func TestAccAWSRedshiftEventSubscription_categoryUpdate(t *testing.T) {
 				ResourceName:      "aws_redshift_event_subscription.bar",
 				ImportState:       true,
 				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccAWSRedshiftEventSubscription_tagsUpdate(t *testing.T) {
+	var v redshift.EventSubscription
+	rInt := acctest.RandInt()
+	resourceName := "aws_redshift_event_subscription.bar"
+
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSRedshiftEventSubscriptionDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSRedshiftEventSubscriptionConfig(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSRedshiftEventSubscriptionExists(resourceName, &v),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Name", "name"),
+				),
+			},
+			{
+				Config: testAccAWSRedshiftEventSubscriptionConfigUpdateTags(rInt, "aaaaa"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSRedshiftEventSubscriptionExists(resourceName, &v),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "2"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Name", "name"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Test", "aaaaa"),
+				),
+			},
+			{
+				Config: testAccAWSRedshiftEventSubscriptionConfigUpdateTags(rInt, "bbbbb"),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSRedshiftEventSubscriptionExists(resourceName, &v),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "2"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Name", "name"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Test", "bbbbb"),
+				),
+			},
+			{
+				Config: testAccAWSRedshiftEventSubscriptionConfig(rInt),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSRedshiftEventSubscriptionExists(resourceName, &v),
+					resource.TestCheckResourceAttr(resourceName, "tags.%", "1"),
+					resource.TestCheckResourceAttr(resourceName, "tags.Name", "name"),
+				),
 			},
 		},
 	})
@@ -381,4 +429,31 @@ resource "aws_redshift_event_subscription" "bar" {
   }
 }
 `, rInt, rInt)
+}
+
+func testAccAWSRedshiftEventSubscriptionConfigUpdateTags(rInt int, rString string) string {
+	return fmt.Sprintf(`
+resource "aws_sns_topic" "aws_sns_topic" {
+  name = "tf-acc-test-redshift-event-subs-sns-topic-%d"
+}
+
+resource "aws_redshift_event_subscription" "bar" {
+  name          = "tf-acc-test-redshift-event-subs-%d"
+  sns_topic_arn = "${aws_sns_topic.aws_sns_topic.arn}"
+  source_type   = "cluster"
+  severity      = "INFO"
+
+  event_categories = [
+    "configuration",
+    "management",
+    "monitoring",
+    "security",
+  ]
+
+  tags = {
+		Name = "name"
+		Test = "%s"
+  }
+}
+`, rInt, rInt, rString)
 }

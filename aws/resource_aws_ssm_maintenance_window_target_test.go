@@ -8,9 +8,9 @@ import (
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/service/ssm"
-	"github.com/hashicorp/terraform/helper/acctest"
-	"github.com/hashicorp/terraform/helper/resource"
-	"github.com/hashicorp/terraform/terraform"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/acctest"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/resource"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 )
 
 func TestAccAWSSSMMaintenanceWindowTarget_basic(t *testing.T) {
@@ -33,6 +33,35 @@ func TestAccAWSSSMMaintenanceWindowTarget_basic(t *testing.T) {
 					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.1.values.1", "acceptance_test2"),
 					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "name", "TestMaintenanceWindowTarget"),
 					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "description", "This resource is for test purpose only"),
+				),
+			},
+			{
+				ResourceName:      "aws_ssm_maintenance_window.foo",
+				ImportState:       true,
+				ImportStateVerify: true,
+			},
+		},
+	})
+}
+
+func TestAccAWSSSMMaintenanceWindowTarget_noNameOrDescription(t *testing.T) {
+	name := acctest.RandString(10)
+	resource.ParallelTest(t, resource.TestCase{
+		PreCheck:     func() { testAccPreCheck(t) },
+		Providers:    testAccProviders,
+		CheckDestroy: testAccCheckAWSSSMMaintenanceWindowTargetDestroy,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccAWSSSMMaintenanceWindowTargetNoNameOrDescriptionConfig(name),
+				Check: resource.ComposeTestCheckFunc(
+					testAccCheckAWSSSMMaintenanceWindowTargetExists("aws_ssm_maintenance_window_target.target"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.0.key", "tag:Name"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.0.values.#", "1"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.0.values.0", "acceptance_test"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.1.key", "tag:Name2"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.1.values.#", "2"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.1.values.0", "acceptance_test"),
+					resource.TestCheckResourceAttr("aws_ssm_maintenance_window_target.target", "targets.1.values.1", "acceptance_test2"),
 				),
 			},
 			{
@@ -192,6 +221,32 @@ resource "aws_ssm_maintenance_window" "foo" {
 resource "aws_ssm_maintenance_window_target" "target" {
   name          = "TestMaintenanceWindowTarget"
   description   = "This resource is for test purpose only"
+  window_id     = "${aws_ssm_maintenance_window.foo.id}"
+  resource_type = "INSTANCE"
+
+  targets {
+    key    = "tag:Name"
+    values = ["acceptance_test"]
+  }
+
+  targets {
+    key    = "tag:Name2"
+    values = ["acceptance_test", "acceptance_test2"]
+  }
+}
+`, rName)
+}
+
+func testAccAWSSSMMaintenanceWindowTargetNoNameOrDescriptionConfig(rName string) string {
+	return fmt.Sprintf(`
+resource "aws_ssm_maintenance_window" "foo" {
+  name     = "maintenance-window-%s"
+  schedule = "cron(0 16 ? * TUE *)"
+  duration = 3
+  cutoff   = 1
+}
+
+resource "aws_ssm_maintenance_window_target" "target" {
   window_id     = "${aws_ssm_maintenance_window.foo.id}"
   resource_type = "INSTANCE"
 
